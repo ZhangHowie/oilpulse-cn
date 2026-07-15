@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime
@@ -40,6 +41,27 @@ REQUEST_TIMEOUT = 10          # 单次请求超时（秒）
 RETRY_TIMES = 3                # 单省份最大重试次数
 RETRY_DELAY_SEC = 2            # 重试间隔（秒）
 REQUEST_INTERVAL_SEC = 0.6     # 省份之间的请求间隔，避免触发接口限流
+
+# 容灾数据源：主接口单个省份重试耗尽后，从公开网页兜底解析同一省份的油价。
+# 该网页没有 89 号汽油数据，兜底结果的 t89 字段会是空字符串（其余字段不受影响）。
+FALLBACK_BASE_URL = "http://www.qiyoujiage.com"
+FALLBACK_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+    )
+}
+PROVINCE_SLUGS = {
+    "安徽": "anhui", "北京": "beijing", "重庆": "chongqing", "福建": "fujian",
+    "甘肃": "gansu", "广东": "guangdong", "广西": "guangxi", "贵州": "guizhou",
+    "海南": "hainan", "河北": "hebei", "黑龙江": "heilongjiang", "河南": "henan",
+    "湖北": "hubei", "湖南": "hunan", "江苏": "jiangsu", "江西": "jiangxi",
+    "吉林": "jilin", "辽宁": "liaoning", "内蒙古": "neimenggu", "宁夏": "ningxia",
+    "青海": "qinghai", "陕西": "shanxi-3", "上海": "shanghai", "山东": "shandong",
+    "山西": "shanxi", "四川": "sichuan", "天津": "tianjin", "西藏": "xizang",
+    "新疆": "xinjiang", "云南": "yunnan", "浙江": "zhejiang",
+}
+OIL_GRADE_FIELD = {"0": "t0", "89": "t89", "92": "t92", "95": "t95", "98": "t98"}
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT_DIR / "data"
@@ -71,6 +93,48 @@ def fetch_province(province: str, app_id: str, app_secret: str) -> dict:
     raise RuntimeError(f"{province} 请求最终失败: {last_err}")
 
 
+def fetch_province_fallback(province: str) -> dict:
+    """主数据源失败时的容灾兜底：解析公开网页获取同一省份的油价，字段与主数据源保持一致。"""
+    slug = PROVINCE_SLUGS[province]
+    url = f"{FALLBACK_BASE_URL}/{slug}.shtml"
+    last_err: Exception | None = None
+
+    for attempt in range(1, RETRY_TIMES + 1):
+        try:
+            resp = requests.get(url, headers=FALLBACK_HEADERS, timeout=REQUEST_TIMEOUT)
+            resp.raise_for_status()
+            resp.encoding = "utf-8"
+
+            block = re.search(r'<div id="youjia">(.*?)</div>\s*<div', resp.text, re.S)
+            if not block:
+                raise RuntimeError("容灾数据源页面结构不符合预期")
+
+            grades: dict[str, str] = {}
+            for dt, dd in re.findall(r"<dt>(.*?)</dt>\s*<dd>(.*?)</dd>", block.group(1), re.S):
+                digits = re.search(r"\d+", dt)
+                if digits and digits.group() in OIL_GRADE_FIELD:
+                    grades[OIL_GRADE_FIELD[digits.group()]] = dd.strip()
+
+            if not grades:
+                raise RuntimeError("容灾数据源未解析出任何油号价格")
+
+            return {
+                "province": province,
+                "t0": grades.get("t0", ""),
+                "t89": grades.get("t89", ""),
+                "t92": grades.get("t92", ""),
+                "t95": grades.get("t95", ""),
+                "t98": grades.get("t98", ""),
+            }
+        except Exception as exc:  # noqa: BLE001 - 需要捕获所有异常以便重试
+            last_err = exc
+            print(f"[WARN] {province} 容灾数据源第 {attempt} 次请求失败: {exc}", file=sys.stderr)
+            if attempt < RETRY_TIMES:
+                time.sleep(RETRY_DELAY_SEC)
+
+    raise RuntimeError(f"{province} 容灾数据源最终失败: {last_err}")
+
+
 def main() -> int:
     app_id = os.environ.get("MXNZP_APP_ID")
     app_secret = os.environ.get("MXNZP_APP_SECRET")
@@ -93,8 +157,13 @@ def main() -> int:
             results[province] = fetch_province(province, app_id, app_secret)
             print(f"[OK] {province}")
         except Exception as exc:  # noqa: BLE001
-            failed.append(province)
-            print(f"[ERROR] {province} 采集失败: {exc}", file=sys.stderr)
+            print(f"[WARN] {province} 主数据源采集失败，尝试容灾数据源: {exc}", file=sys.stderr)
+            try:
+                results[province] = fetch_province_fallback(province)
+                print(f"[OK] {province}（容灾数据源）")
+            except Exception as fallback_exc:  # noqa: BLE001
+                failed.append(province)
+                print(f"[ERROR] {province} 容灾数据源也失败: {fallback_exc}", file=sys.stderr)
 
         if i < len(PROVINCES) - 1:
             time.sleep(REQUEST_INTERVAL_SEC)
