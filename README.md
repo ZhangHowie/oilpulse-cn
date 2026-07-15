@@ -1,8 +1,7 @@
 # OilPulse-CN 油价脉搏
 
-每天 06:00 和 22:00（北京时间）自动从 [mxnzp 油价接口](https://www.mxnzp.com/api/oil/search)
-采集全国 31 个省级行政区的油价，并同步到本仓库。任何人都可以直接通过一个固定 URL 拿到最新
-油价数据，无需自己申请接口密钥、无需自己搭服务器。
+每天 06:00 和 22:00（北京时间）自动采集全国 31 个省级行政区的油价，并同步到本仓库。任何人都
+可以直接通过一个固定 URL 拿到最新油价数据，无需自己申请接口密钥、无需自己搭服务器。
 
 详细设计见 [DESIGN.md](./DESIGN.md)。
 
@@ -31,7 +30,6 @@ https://raw.githubusercontent.com/<你的GitHub用户名>/oilpulse-cn/main/data/
 ```json
 {
   "updated_at": "2026-07-15T06:00:12+08:00",
-  "source": "https://www.mxnzp.com/api/oil/search",
   "province_count": 31,
   "failed_provinces": [],
   "provinces": {
