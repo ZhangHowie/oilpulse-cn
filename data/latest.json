@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-10-23T08:14:15.265907+08:00",
+  "updated_at": "2026-10-24T02:00:43.523745+08:00",
   "source": "https://www.mxnzp.com/api/oil/search",
   "province_count": 31,
   "failed_provinces": [],
@@ -106,7 +106,7 @@
       "t89": "0.00",
       "t92": "8.62",
       "t95": "9.23",
-      "t98": "10.98"
+      "t98": "10.63"
     },
     "湖南": {
       "province": "湖南",
